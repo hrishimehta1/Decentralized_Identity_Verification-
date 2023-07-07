@@ -1,0 +1,210 @@
+// SPDX-License-Identifier: MIT
+//Creator: Hrishi Mehta 
+//06/19/23
+
+pragma solidity ^0.8.0;
+
+contract IdentityVerification {
+    struct Identity {
+        string name;
+        uint256 age;
+        string medicalRecordsHash;
+        address verifier;
+        bool isVerified;
+        uint256 createdAt;
+        uint256 updatedAt;
+        bool isActive;
+        mapping(address => bool) authorizedAccess;
+        string[] authorizedApps;
+        uint256 accessExpiration;
+        uint256 maxAccessDuration;
+        uint256 minAgeRequirement;
+        string[] allowedDocumentTypes;
+        mapping(string => bool) authorizedDocuments;
+    }
+
+    mapping(address => Identity) private identities;
+
+    event IdentityVerified(address indexed user, string name, uint256 age, string medicalRecordsHash);
+    event IdentityRevoked(address indexed user);
+    event AccessGranted(address indexed user, address indexed app, uint256 expiration);
+    event AccessRevoked(address indexed user, address indexed app);
+    event AccessExpirationUpdated(address indexed user, address indexed app, uint256 expiration);
+    event MaxAccessDurationUpdated(address indexed user, uint256 duration);
+    event MinAgeRequirementUpdated(address indexed user, uint256 age);
+    event DocumentAdded(address indexed user, string documentType);
+    event DocumentRemoved(address indexed user, string documentType);
+
+    modifier onlyVerifier() {
+        require(identities[msg.sender].isVerified, "Only verified verifiers can perform this operation");
+        _;
+    }
+
+    function verifyIdentity(address _user, string memory _name, uint256 _age, string memory _medicalRecordsHash) public onlyVerifier {
+        Identity storage identity = identities[_user];
+        require(!identity.isVerified, "Identity already verified");
+        require(_age >= identity.minAgeRequirement, "Age requirement not met");
+
+        identity.name = _name;
+        identity.age = _age;
+        identity.medicalRecordsHash = _medicalRecordsHash;
+        identity.verifier = msg.sender;
+        identity.isVerified = true;
+        identity.createdAt = block.timestamp;
+        identity.updatedAt = block.timestamp;
+        identity.isActive = true;
+
+        emit IdentityVerified(_user, _name, _age, _medicalRecordsHash);
+    }
+
+    function revokeIdentity(address _user) public onlyVerifier {
+        Identity storage identity = identities[_user];
+        require(identity.isVerified, "Identity not yet verified");
+
+        identity.isVerified = false;
+        identity.isActive = false;
+
+        emit IdentityRevoked(_user);
+    }
+
+    function grantAccess(address _user, address _app, uint256 _duration) public onlyVerifier {
+        Identity storage identity = identities[_user];
+        require(identity.isVerified, "Identity not yet verified");
+
+        identity.authorizedAccess[_app] = true;
+        identity.authorizedApps.push(toString(_app));
+        identity.accessExpiration = block.timestamp + _duration;
+
+        emit AccessGranted(_user, _app, identity.accessExpiration);
+    }
+
+    function revokeAccess(address _user, address _app) public onlyVerifier {
+        Identity storage identity = identities[_user];
+        require(identity.isVerified, "Identity not yet verified");
+
+        identity.authorizedAccess[_app] = false;
+        removeAuthorizedApp(identity, _app);
+
+        emit AccessRevoked(_user, _app);
+    }
+
+    function updateAccessExpiration(address _user, address _app, uint256 _expiration) public onlyVerifier {
+        Identity storage identity = identities[_user];
+        require(identity.isVerified, "Identity not yet verified");
+        require(identity.authorizedAccess[_app], "Access not granted");
+
+        identity.accessExpiration = _expiration;
+
+        emit AccessExpirationUpdated(_user, _app, _expiration);
+    }
+
+    function updateMaxAccessDuration(address _user, uint256 _duration) public onlyVerifier {
+        Identity storage identity = identities[_user];
+        require(identity.isVerified, "Identity not yet verified");
+
+        identity.maxAccessDuration = _duration;
+
+        emit MaxAccessDurationUpdated(_user, _duration);
+    }
+
+    function updateMinAgeRequirement(address _user, uint256 _age) public onlyVerifier {
+        Identity storage identity = identities[_user];
+        require(identity.isVerified, "Identity not yet verified");
+
+        identity.minAgeRequirement = _age;
+
+        emit MinAgeRequirementUpdated(_user, _age);
+    }
+
+    function addAuthorizedDocument(address _user, string memory _documentType) public onlyVerifier {
+        Identity storage identity = identities[_user];
+        require(identity.isVerified, "Identity not yet verified");
+
+        identity.allowedDocumentTypes.push(_documentType);
+        identity.authorizedDocuments[_documentType] = true;
+
+        emit DocumentAdded(_user, _documentType);
+    }
+
+    function removeAuthorizedDocument(address _user, string memory _documentType) public onlyVerifier {
+        Identity storage identity = identities[_user];
+        require(identity.isVerified, "Identity not yet verified");
+
+        identity.authorizedDocuments[_documentType] = false;
+        removeAuthorizedDocumentType(identity, _documentType);
+
+        emit DocumentRemoved(_user, _documentType);
+    }
+
+    function getIdentity(address _user) public view returns (string memory, uint256, string memory, bool, uint256, uint256, bool) {
+        Identity storage identity = identities[_user];
+        return (identity.name, identity.age, identity.medicalRecordsHash, identity.isVerified, identity.createdAt, identity.updatedAt, identity.isActive);
+    }
+
+    function getAuthorizedApps(address _user) public view returns (string[] memory) {
+        Identity storage identity = identities[_user];
+        return identity.authorizedApps;
+    }
+
+    function hasAccess(address _user, address _app) public view returns (bool) {
+        Identity storage identity = identities[_user];
+        return identity.authorizedAccess[_app] && (block.timestamp <= identity.accessExpiration);
+    }
+
+    function isAuthorizedDocument(address _user, string memory _documentType) public view returns (bool) {
+        Identity storage identity = identities[_user];
+        return identity.authorizedDocuments[_documentType];
+    }
+
+    function removeAuthorizedApp(Identity storage _identity, address _app) internal {
+        for (uint256 i = 0; i < _identity.authorizedApps.length; i++) {
+            if (addressToString(_app) == _identity.authorizedApps[i]) {
+                delete _identity.authorizedApps[i];
+                break;
+            }
+        }
+    }
+
+    function removeAuthorizedDocumentType(Identity storage _identity, string memory _documentType) internal {
+        for (uint256 i = 0; i < _identity.allowedDocumentTypes.length; i++) {
+            if (keccak256(bytes(_documentType)) == keccak256(bytes(_identity.allowedDocumentTypes[i]))) {
+                delete _identity.allowedDocumentTypes[i];
+                break;
+            }
+        }
+    }
+
+
+
+
+/**
+:
+
+verifyIdentity: Allows a verified verifier to verify the identity of a user by providing their name, age, and a hash of their medical records. Updates the user's identity information and emits an IdentityVerified event.
+
+revokeIdentity: Allows a verified verifier to revoke the verified status of an identity. Marks the identity as unverified and emits an IdentityRevoked event.
+
+grantAccess: Allows a verified verifier to grant access to a specific application for an identity. Specifies the duration of access and updates the access expiration timestamp. Emits an AccessGranted event.
+
+revokeAccess: Allows a verified verifier to revoke access for a specific application from an identity. Removes access and authorization for the application and emits an AccessRevoked event.
+
+updateAccessExpiration: Allows a verified verifier to update the access expiration timestamp for a specific application and identity. Emits an AccessExpirationUpdated event.
+
+updateMaxAccessDuration: Allows a verified verifier to update the maximum duration for which access can be granted to an identity. Emits a MaxAccessDurationUpdated event.
+
+updateMinAgeRequirement: Allows a verified verifier to update the minimum age requirement for identity verification. Emits a MinAgeRequirementUpdated event.
+
+addAuthorizedDocument: Allows a verified verifier to add an authorized document type to an identity. Emits a DocumentAdded event.
+
+removeAuthorizedDocument: Allows a verified verifier to remove an authorized document type from an identity. Emits a DocumentRemoved event.
+
+getIdentity: Retrieves the identity information of a user, including their name, age, medical records hash, verification status, creation timestamp, update timestamp, and active status.
+
+getAuthorizedApps: Retrieves the list of authorized application addresses for an identity.
+
+hasAccess: Checks if an identity has access to a specific application, taking into account the access expiration timestamp.
+
+isAuthorizedDocument: Checks if a specific document type is authorized for an identity.
+
+
+ */
